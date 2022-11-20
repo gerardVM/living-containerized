@@ -1,15 +1,13 @@
 # HOW TO USE IT
 
-You just need to have docker installed and being able to copy a file in order to do a backup copy of bashrc file.
-
-Please, proceed as follows:
+You just need to have docker installed. Please, proceed as follows:
 
 ```bash
-cp ${HOME}/.bashrc ${HOME}/.bashrc.bak # First step is doing a backup copy in case of emergency
-docker run --rm curlimages/curl https://raw.githubusercontent.com/gerardVM/living-containerized/main/aliases.txt >> ${HOME}/.bashrc
+docker run --rm curlimages/curl https://raw.githubusercontent.com/gerardVM/living-containerized/main/aliases > ~/.living_containerized # Execute this command every time you want to use the last version of this repository
+echo "[[ -f ~/.living_containerized ]] && source ~/.living_containerized" >> ~/.bashrc # This includes an extra line into your ~/.bashrc file
+docker image rm curlimages/curl:latest # Clean recently used Docker image
 ```
-
-Once these two commands are executed, open a new terminal and then you are free to go.
+Once these commands are executed, open a new terminal and then you are free to go.
 
 Be aware that you may have limitations if you are trying to perform complex operations with these tools.
 
