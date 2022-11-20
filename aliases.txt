@@ -1,9 +1,0 @@
-# TERRAFORM  #
-function terraform() { 
-	docker run --rm -it -v ${PWD}:/work -w /work hashicorp/terraform:$1 "$@"
-}
-
-# GIT #
-function git () {
-    	docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} alpine/git "$@"
-}

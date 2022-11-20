@@ -1,0 +1,11 @@
+# TERRAFORM  #
+function terraform() {
+        local p1 ; [ -v $TF_VERSION ] && echo "TF_VERSION variable not specified. Using tag 'latest'..." || p1=":${TF_VERSION}" ;
+        env > $HOME/.docker_env ;
+        docker run --rm --env-file $HOME/.docker_env -it -v $PWD:/work -w /work hashicorp/terraform${p1} ${@} ;
+}
+
+# GIT #
+function git () {
+    	docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} alpine/git ${@}
+}
