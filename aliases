@@ -1,11 +1,24 @@
 # TERRAFORM  #
 function terraform() {
-        env > $HOME/.docker_env ;
-        local p1 ; [ -v $TF_VERSION ] && echo "TF_VERSION variable not specified. Using tag 'latest'..." || p1=":${TF_VERSION}" ;
-        docker run --rm --env-file $HOME/.docker_env -it -v $PWD:/work -w /work hashicorp/terraform${p1} ${@} ;
+	local p1 ; [ -v $TF_VERSION ] && p1="latest" && echo "TF_VERSION = ${p1}" || p1="$TF_VERSION" ;
+	docker run --rm -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE -v $HOME:/root -w /root/${PWD#$HOME} hashicorp/terraform:${p1} ${@} ;
 }
 
 # GIT #
-function git () {
-    	docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} alpine/git ${@}
+function git() {
+	docker run --rm -v ${HOME}:/root -w /root/${PWD#$HOME} alpine/git ${@}
+}
+
+# TERRAFORM with MAKE #
+function make() {
+	local p1 ; [ -v $TF_VERSION ] && p1="latest" && echo "TF_VERSION = ${p1}" || p1="$TF_VERSION" ;
+	if [[ "$(docker images -q terraform_with_make:$p1 2> /dev/null)" == "" ]]; then
+	printf " FROM hashicorp/terraform:${p1}
+		 RUN apk add --update make
+		 RUN apk add --update bash
+		 ENTRYPOINT [\"/usr/bin/make\"]
+	       " > Dockerfile
+	docker build -t terraform_with_make:${p1} . && rm Dockerfile
+	fi
+	docker run --rm -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE -v $HOME:/root -w /root/${PWD#$HOME} terraform_with_make:${p1} ${@} ;
 }
