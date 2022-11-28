@@ -1,25 +1,31 @@
-alias docker-run="docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME}"
-alias docker-run-debug="docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} --entrypoint sh"
+alias docker-run="docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} --entrypoint"
+alias destroy-base="docker image rm main-tools:latest"
+function debug-base() { destroy-base ; set-base && docker run --rm --entrypoint bash -it main-tools ; }
+
+function versioning() {
+	[ -v $TF_VERSION ] && TF_VERSION=latest || TF_VERSION=$TF_VERSION ; echo "TF_VERSION=$TF_VERSION" ;
+}
+
+function set-base() {	
+	versioning ;
+	if [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; then
+	printf " FROM hashicorp/terraform:$TF_VERSION
+		 RUN apk update
+		 RUN apk add make
+		 RUN apk add bash
+               " > Dockerfile
+	docker build --no-cache -t main-tools:latest . && rm Dockerfile
+	fi
+}
 
 # TERRAFORM #
 function terraform() {
-	local p1 ; [ -v $TF_VERSION ] && p1="latest" || p1="$TF_VERSION" ; echo "TF_VERSION=${p1}" ;
-	docker-run -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE hashicorp/terraform:${p1} ${@} ;
-}
-
-# TERRAFORM with MAKE #
-function make() {
-	local p1 ; [ -v $TF_VERSION ] && p1="latest" || p1="$TF_VERSION" ; echo "TF_VERSION=${p1}" ;
-	if [[ "$(docker images -q terraform_with_make:$p1 2> /dev/null)" == "" ]]; then
-	printf " FROM hashicorp/terraform:${p1}
-		 RUN apk add --update make
-		 RUN apk add --update bash
-		 ENTRYPOINT [\"/usr/bin/make\"]
-	       " > Dockerfile
-	docker build -t terraform_with_make:${p1} . && rm Dockerfile
-	fi
-	docker-run -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE terraform_with_make:${p1} ${@} ;
+	set-base ;
+	docker-run terraform -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE main-tools ${@} ;
 }
 
 # GIT #
-function git() { docker-run alpine/git ${@} ; }
+function git() {
+	set-base ;
+	docker-run git main-tools ${@} ; 
+}
