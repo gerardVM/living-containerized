@@ -1,31 +1,64 @@
-alias docker-run="docker run --rm -it -v ${HOME}:/root -w /root/${PWD#$HOME} --entrypoint"
-alias destroy-base="docker image rm main-tools:latest"
-function debug-base() { destroy-base ; set-base && docker run --rm --entrypoint bash -it main-tools ; }
+#### CONTROLLING VERSIONS ####
 
-function versioning() {
-	[ -v $TF_VERSION ] && TF_VERSION=latest || TF_VERSION=$TF_VERSION ; echo "TF_VERSION=$TF_VERSION" ;
+function update-versions { cp ~/.tool-versions . && sed -i '' -e "s/${1}.*/${1} ${2}/" ./.tool-versions ; }
+function versions-modified { ! cmp -s ~/.tool-versions ./.tool-versions ; }
+function no-image { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
+function set-tools-file { cp ./.tool-versions ~/.tool-versions ; }
+function find-version { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
+
+#### BUILDING IMAGE ####
+
+function set-base() {
+        [ -v TF_VERSION ] && update-versions terraform $TF_VERSION
+        if [ -f ./.tool-versions ] && versions-modified || no-image ; then
+        set-tools-file ;
+        echo "Building image... your setup is:\n$(cat ~/.tool-versions)" ;
+        DOCKERFILE="FROM alpine:latest \n RUN apk update";
+        install_${1} ;
+        echo $DOCKERFILE > /tmp/Dockerfile ;
+        docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
+        unset IMAGE  &&  docker rmi $(docker images -qa -f 'dangling=true') ;
+        fi ; }
+
+#### DEFINING CONTAINER ####
+
+function execute {
+        [[ ${2} == "main-tools" ]] && set-base ${1} ;
+        echo "You got into a container with ${2} as image" ;
+        docker run --rm -it \
+        --entrypoint ${1} \
+        -v ${HOME}:/root \
+        -w /root${PWD#$HOME} \
+        -e TF_LOG=$TF_LOG \
+        -e AWS_PROFILE=$AWS_PROFILE \
+        ${2} ${@:3} ; }
+
+#### CALLING THE TOOLS ####
+
+alias terraform="execute terraform main-tools"
+alias git="execute git alpine/git"
+alias make="execute make main-tools"
+alias aws="execute aws amazon/aws-cli"
+alias go="execute go golang:alpine"
+
+#### INSTALLS ####
+
+function install_make { DOCKERFILE+="\nRUN apk add make" ;
+                install_bash ;
+                install_git ;
+                install_terraform ;
+#               install_go ;
 }
 
-function set-base() {	
-	versioning ;
-	if [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; then
-	printf " FROM hashicorp/terraform:$TF_VERSION
-		 RUN apk update
-		 RUN apk add make
-		 RUN apk add bash
-               " > Dockerfile
-	docker build --no-cache -t main-tools:latest . && rm Dockerfile
-	fi
-}
+function install_bash() {DOCKERFILE+="\nRUN apk add bash" ; }
 
-# TERRAFORM #
-function terraform() {
-	set-base ;
-	docker-run terraform -e TF_LOG=$TF_LOG -e AWS_PROFILE=$AWS_PROFILE main-tools ${@} ;
-}
+function install_git() { DOCKERFILE+="\nRUN apk add openssh git" ; }
 
-# GIT #
-function git() {
-	set-base ;
-	docker-run git main-tools ${@} ; 
-}
+function install_terraform() {  DOCKERFILE+="
+        RUN wget https://releases.hashicorp.com/terraform/$(find-version terraform)/terraform_$(find-version terraform)_linux_amd64.zip
+        RUN unzip terraform_$(find-version terraform)_linux_amd64.zip && rm terraform_$(find-version terraform)_linux_amd64.zip
+        RUN mv terraform /usr/bin/terraform" ; }
+
+function install_go() { DOCKERFILE+="
+        COPY --from=golang:alpine /usr/local/go/ /usr/local/go/
+        ENV PATH=\"/usr/local/go/bin:${PATH}\"" ; }
