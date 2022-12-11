@@ -1,29 +1,26 @@
-#### CONTROLLING VERSIONS ####
+##### LIST OF TOOLS AND VARIABLES #####
 
-function update-versions { cp ~/.tool-versions . && sed -i '' -e "s/${1}.*/${1} ${2}/" ./.tool-versions ; }
-function versions-modified { ! cmp -s ~/.tool-versions ./.tool-versions ; }
-function no-image { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
-function set-tools-file { cp ./.tool-versions ~/.tool-versions ; }
-function find-version { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
+declare -a list_of_tools=(
+        "terraform TF_VERSION"
+        "go GO_VERSION"
+)
 
-#### BUILDING IMAGE ####
+##### DEFINING BASE IMAGE #####
 
-function set-base() {
-        [ -v TF_VERSION ] && update-versions terraform $TF_VERSION
-        if [ -f ./.tool-versions ] && versions-modified || no-image ; then
-        set-tools-file ;
-        echo "Building image... your setup is:\n$(cat ~/.tool-versions)" ;
-        DOCKERFILE="FROM alpine:latest \n RUN apk update";
-        install_${1} ;
-        echo $DOCKERFILE > /tmp/Dockerfile ;
-        docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-        unset IMAGE  &&  docker rmi $(docker images -qa -f 'dangling=true') ;
-        fi ; }
+function add_installations() {
+        generic_install make ;
+        generic_install mlocate ;
+        generic_install bash ;
+        generic_install openssh git ;
+        for tool in "${list_of_tools[@]}" ; do
+                [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && install_$(echo $tool | cut -d " " -f 1)
+        done
+}
 
-#### DEFINING CONTAINER ####
+##### DEFINING CONTAINER #####
 
 function execute {
-        [[ ${2} == "main-tools" ]] && set-base ${1} ;
+        [[ ${2} == "main-tools" ]] && set-base ;
         echo "You got into a container with ${2} as image" ;
         docker run --rm -it \
         --entrypoint ${1} \
@@ -33,32 +30,74 @@ function execute {
         -e AWS_PROFILE=$AWS_PROFILE \
         ${2} ${@:3} ; }
 
-#### CALLING THE TOOLS ####
+##### CONTROLLING VERSIONS #####
 
-alias terraform="execute terraform main-tools"
-alias git="execute git alpine/git"
-alias make="execute make main-tools"
-alias aws="execute aws amazon/aws-cli"
-alias go="execute go golang:alpine"
-
-#### INSTALLS ####
-
-function install_make { DOCKERFILE+="\nRUN apk add make" ;
-                install_bash ;
-                install_git ;
-                install_terraform ;
-#               install_go ;
+function read-versions {
+        [ -f ./.tool-versions ] && local vFile="./.tool-versions" || local vFile="$HOME/.tool-versions"
+        echo "Your setup is:\n$(cat $vFile)" ;
+        alias file_column='echo $line | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
+        while read line;
+                do for tool in "${list_of_tools[@]}" ; do
+                        [[ $(tool_column 1) == $(file_column 1) ]] && export "$(tool_column 2)=$(file_column 2)" ||
+                        unset $(tool_column 2)
+                done
+        done < $vFile
+        local variables="|" && for tool in "${list_of_tools[@]}" ; do variables+=" $(tool_column 2) |" ; done
+        echo "You may want to set, unset of modify following variables:\n$variables"
+        unalias file_column tool_column ;
 }
 
-function install_bash() {DOCKERFILE+="\nRUN apk add bash" ; }
+function update-versions {
+        alias tool_column='echo $tool | cut -d " " -f'
+        for tool in "${list_of_tools[@]}" ; do [ -v $(tool_column 2) ] && : > ./.tool-versions ; done
+        for tool in "${list_of_tools[@]}" ; do
+                [ -v $(tool_column 2) ] && echo "$(tool_column 1) $(eval echo \$$(tool_column 2))" >> ./.tool-versions
+        done
+        unalias tool_column
+}
 
-function install_git() { DOCKERFILE+="\nRUN apk add openssh git" ; }
+function versions-modified { ! cmp -s ~/.tool-versions ./.tool-versions ; }
+function set-tools-file { cp ./.tool-versions ~/.tool-versions ; }
+function find_version { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
+
+##### HELPERS #####
+
+function no-image { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
+
+##### BUILDING IMAGE #####
+
+function set-base() {
+        update-versions ;
+        if [ -f ./.tool-versions ] && versions-modified || no-image ; then
+        set-tools-file ;
+        # [ -v IMAGE ] || To Do: Implement different base images
+        local IMAGE=alpine:latest
+        echo "Building image from $IMAGE... your setup is:\n$(cat ~/.tool-versions)" ;
+        local DOCKERFILE="FROM $IMAGE \n RUN apk update" && add_installations ;
+        echo $DOCKERFILE > /tmp/Dockerfile ;
+        docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
+        docker rmi $(docker images -qa -f 'dangling=true') ;
+        fi ; }
+
+##### CALLING THE TOOLS #####
+
+alias make="execute make main-tools"
+alias git="execute git alpine/git"
+alias aws="execute aws amazon/aws-cli"
+alias terraform="execute terraform main-tools"
+alias go="execute go main-tools"
+# alias debug-image="execute bash main-tools"
+# alias k9s="execute k9s quay.io/derailed/k9s"
+
+##### INSTALLATIONS #####
+
+function generic_install() { DOCKERFILE+="\nRUN apk add ${@}" ; }
 
 function install_terraform() {  DOCKERFILE+="
-        RUN wget https://releases.hashicorp.com/terraform/$(find-version terraform)/terraform_$(find-version terraform)_linux_amd64.zip
-        RUN unzip terraform_$(find-version terraform)_linux_amd64.zip && rm terraform_$(find-version terraform)_linux_amd64.zip
+        RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_amd64.zip
+        RUN unzip terraform_$(find_version terraform)_linux_amd64.zip && rm terraform_$(find_version terraform)_linux_amd64.zip
         RUN mv terraform /usr/bin/terraform" ; }
 
 function install_go() { DOCKERFILE+="
-        COPY --from=golang:alpine /usr/local/go/ /usr/local/go/
+        COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
         ENV PATH=\"/usr/local/go/bin:${PATH}\"" ; }
