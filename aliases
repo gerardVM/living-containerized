@@ -3,7 +3,7 @@
 declare -a list_of_tools=(
         "terraform TF_VERSION"
         "go GO_VERSION"
-	"nodejs NODE_VERSION"
+        "nodejs NODE_VERSION"
 )
 
 ##### DEFINING BASE IMAGE #####
@@ -12,7 +12,11 @@ function add_installations() {
         generic_install make ;
         generic_install mlocate ;
         generic_install bash ;
-        generic_install openssh git ;
+        generic_install wget ;
+        generic_install zip ;
+#       generic_install openssh ;
+#       generic_install openssh-server ;
+        generic_install git ;
         for tool in "${list_of_tools[@]}" ; do
                 [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && install_$(echo $tool | cut -d " " -f 1)
         done
@@ -21,7 +25,7 @@ function add_installations() {
 ##### DEFINING CONTAINER #####
 
 function execute {
-        [[ ${2} == "main-tools" ]] && set-base ;
+        [[ ${2} == "main-tools" ]] && take-base ;
         echo "You got into a container with ${2} as image" ;
         docker run --rm -it \
         --entrypoint ${1} \
@@ -37,8 +41,8 @@ function read-versions {
         [ -f ./.tool-versions ] && local vFile="./.tool-versions" || local vFile="$HOME/.tool-versions"
         echo "Your setup is:" && cat $vFile ;
         alias file_column='echo $line | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
-        while read line; do 
-		for tool in "${list_of_tools[@]}" ; do
+        while read line; do
+                for tool in "${list_of_tools[@]}" ; do
                         [[ $(tool_column 1) == $(file_column 1) ]] && export "$(tool_column 2)=$(file_column 2)" # || unset $(tool_column 2)
                 done
         done < $vFile
@@ -47,7 +51,7 @@ function read-versions {
         unalias file_column tool_column ;
 }
 
-function update-versions {
+function update-versions { # This is improvable
         alias tool_column='echo $tool | cut -d " " -f'
         for tool in "${list_of_tools[@]}" ; do [ -v $(tool_column 2) ] && : > ./.tool-versions ; done
         for tool in "${list_of_tools[@]}" ; do
@@ -66,18 +70,22 @@ function no-image { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "
 
 ##### BUILDING IMAGE #####
 
-function set-base() {
+function take-base() {
         update-versions ;
-        if [ -f ./.tool-versions ] && versions-modified || no-image ; then
+        if [ -f ./.tool-versions ] && versions-modified || no-image ; then set-base ; fi
+}
+
+function set-base() {
         set-tools-file ;
-        # [ -v IMAGE ] || To Do: Implement different base images
-        local IMAGE=alpine:latest
-	echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
-	echo -e "FROM $IMAGE \nRUN apk update" > /tmp/Dockerfile ;
-	add_installations ;
-        sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-        docker rmi $(docker images -qa -f 'dangling=true') ;
-        fi ; }
+        [ -v IMAGE ] || local IMAGE=alpine:latest ; set_installation_mode ;
+        docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
+        echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
+        echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
+        add_installations ;
+#       sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
+        docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
+        docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ;
+        unset MANAGER INSTALL ; }
 
 ##### CALLING THE TOOLS #####
 
@@ -86,28 +94,50 @@ alias git="execute git alpine/git"
 alias aws="execute aws amazon/aws-cli"
 alias terraform="execute terraform main-tools"
 alias go="execute go main-tools"
-# alias debug-image="execute sh main-tools"
+alias node="execute node main-tools"
+alias debug-image="execute bash main-tools" # Careful with bringing .bashrc file
 # alias k9s="execute k9s quay.io/derailed/k9s"
+
+##### TESTING #####
+
+function test-installations() {
+        function try_versions() {
+        for tool in "${list_of_tools[@]}" ; do
+                [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
+        done ; }
+        local IMAGE=ubuntu:latest && set-base && try_versions ;
+        local IMAGE=cimg/base:current && set-base && try_versions ;
+        unset IMAGE && set-base && try_versions ;
+}
 
 ##### INSTALLATIONS #####
 
-function generic_install() { echo "RUN apk add ${@}" >> /tmp/Dockerfile ; }
+function set_installation_mode() { # This is improvable
+        case ${IMAGE} in
+        alpi*)  MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
+        ubun*)  MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
+        cimg*)  MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
+        *)      MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
+        esac
+}
+
+function generic_install() { echo "RUN $MANAGER $INSTALL ${@}" >> /tmp/Dockerfile ; }
 
 function install_terraform() {  echo "
-	# Terraform installation
-	RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_amd64.zip
-        RUN unzip terraform_$(find_version terraform)_linux_amd64.zip && rm terraform_$(find_version terraform)_linux_amd64.zip
-        RUN mv terraform /usr/bin/terraform" >> /tmp/Dockerfile ; }
+        # Terraform installation
+        RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_${ARCH}.zip
+        RUN unzip terraform_$(find_version terraform)_linux_${ARCH}.zip && rm terraform_$(find_version terraform)_linux_${ARCH}.zip
+        RUN $move terraform /usr/bin/terraform" >> /tmp/Dockerfile ; }
 
 function install_go() { echo "
         # Golang installation
-	COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
+        COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
         ENV PATH=\"/usr/local/go/bin:${PATH}\"" >> /tmp/Dockerfile ; }
 
 function install_nodejs() { echo "
-	# Nodejs installation
-	COPY --from=node:$(find_version nodejs)-alpine /usr/lib /usr/lib
-	COPY --from=node:$(find_version nodejs)-alpine /usr/local/share /usr/local/share
-	COPY --from=node:$(find_version nodejs)-alpine /usr/local/lib /usr/local/lib
-	COPY --from=node:$(find_version nodejs)-alpine /usr/local/include /usr/local/include
-	COPY --from=node:$(find_version nodejs)-alpine /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ; }
+        # Nodejs installation
+        COPY --from=node:$(find_version nodejs)-alpine /usr/lib /usr/lib
+        COPY --from=node:$(find_version nodejs)-alpine /usr/local/share /usr/local/share
+        COPY --from=node:$(find_version nodejs)-alpine /usr/local/lib /usr/local/lib
+        COPY --from=node:$(find_version nodejs)-alpine /usr/local/include /usr/local/include
+        COPY --from=node:$(find_version nodejs)-alpine /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ; }
