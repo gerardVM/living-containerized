@@ -1,91 +1,86 @@
 ##### LIST OF TOOLS AND VARIABLES #####
 
 declare -a list_of_tools=(
-        "terraform TF_VERSION"
-        "go GO_VERSION"
-        "nodejs NODE_VERSION"
+  "terraform TF_VERSION"
+  "go GO_VERSION"
+  "nodejs NODE_VERSION"
 )
 
 ##### DEFINING BASE IMAGE #####
 
 function add_installations() {
-        generic_install make ;
-        generic_install mlocate ;
-        generic_install bash ;
-        generic_install wget ;
-        generic_install zip ;
-#       generic_install openssh ;
-#       generic_install openssh-server ;
-        generic_install git ;
-        for tool in "${list_of_tools[@]}" ; do
-                [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && install_$(echo $tool | cut -d " " -f 1)
-        done
+  ! image_is cimg/b && generic_install make ;
+    image_is alpine && generic_install mlocate ;
+    image_is alpine && generic_install bash ;
+    image_is ubuntu && generic_install wget ;
+    image_is ubuntu && generic_install zip ;
+    image_is alpine && generic_install openssh ;
+    image_is ubuntu && generic_install openssh-server ;
+  ! image_is cimg/b && generic_install git ;
+  install_versioned_tools ;
 }
 
 ##### DEFINING CONTAINER #####
 
 function execute {
-        [[ ${2} == "main-tools" ]] && take-base ;
-        echo "You got into a container with ${2} as image" ;
-        docker run --rm -it \
-        --entrypoint ${1} \
-        -v ${HOME}:/root \
-        -w /root${PWD#$HOME} \
-        -e TF_LOG=$TF_LOG \
-        -e AWS_PROFILE=$AWS_PROFILE \
-        ${2} ${@:3} ; }
+  [[ ${2} == "main-tools" ]] && take-base ;
+  echo "You got into a container with ${2} as image" ;
+  docker run --rm -it \
+    --entrypoint ${1} \
+    -v ${HOME}:/root \
+    -w /root${PWD#$HOME} \
+    -e TF_LOG=$TF_LOG \
+    -e AWS_PROFILE=$AWS_PROFILE \
+    ${2} ${@:3} ; }
 
 ##### CONTROLLING VERSIONS #####
 
 function read-versions {
-        [ -f ./.tool-versions ] && local vFile="./.tool-versions" || local vFile="$HOME/.tool-versions"
-        echo "Your setup is:" && cat $vFile ;
-        alias file_column='echo $line | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
-        while read line; do
-                for tool in "${list_of_tools[@]}" ; do
-                        [[ $(tool_column 1) == $(file_column 1) ]] && export "$(tool_column 2)=$(file_column 2)" # || unset $(tool_column 2)
-                done
-        done < $vFile
-        local variables="|" && for tool in "${list_of_tools[@]}" ; do variables+=" $(tool_column 2) |" ; done
-        echo -e "You may want to set, unset of modify following variables: \n$variables"
-        unalias file_column tool_column ;
+  [ -f ./.tool-versions ] && local vFile="./.tool-versions" || local vFile="$HOME/.tool-versions"
+  echo "Your setup is:" && cat $vFile ;
+  alias file_column='echo $line | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
+  while read line; do
+    for tool in "${list_of_tools[@]}" ; do
+      [[ $(tool_column 1) == $(file_column 1) ]] && export "$(tool_column 2)=$(file_column 2)" # || unset $(tool_column 2)
+    done
+  done < $vFile
+  local variables="|" && for tool in "${list_of_tools[@]}" ; do variables+=" $(tool_column 2) |" ; done
+  echo -e "You may want to set, unset of modify following variables: \n$variables"
+  unalias file_column tool_column ;
 }
-
-function update-versions { # This is improvable
-        alias tool_column='echo $tool | cut -d " " -f'
-        for tool in "${list_of_tools[@]}" ; do [ -v $(tool_column 2) ] && : > ./.tool-versions ; done
-        for tool in "${list_of_tools[@]}" ; do
-                [ -v $(tool_column 2) ] && echo "$(tool_column 1) $(eval echo \$$(tool_column 2))" >> ./.tool-versions
-        done
-        unalias tool_column
-}
-
-function versions-modified { ! cmp -s ~/.tool-versions ./.tool-versions ; }
-function set-tools-file { cp ./.tool-versions ~/.tool-versions ; }
-function find_version { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
 
 ##### HELPERS #####
 
-function no-image { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
+function versions-modified() { ! cmp -s ~/.tool-versions ./.tool-versions ; }
+function set-tools-file() { cp ./.tool-versions ~/.tool-versions ; }
+function find_version() { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
+function no-image() { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
+function image_is() { [[ $IMAGE == ${1}* ]] ; }
+function install_versioned_tools() {
+  for tool in "${list_of_tools[@]}" ; do
+    [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && install_$(echo $tool | cut -d " " -f 1)
+  done
+}
 
 ##### BUILDING IMAGE #####
 
-function take-base() {
-        update-versions ;
-        if [ -f ./.tool-versions ] && versions-modified || no-image ; then set-base ; fi
-}
+function set-image() {
+  local options=("alpine:latest" "ubuntu:latest" "cimg/base:current")
+  select opt in "${options[@]}" ; do [ $opt ] && IMAGE=$opt || IMAGE=alpine:latest ;
+  echo "Image set to: $IMAGE" ; break ; done }
 
-function set-base() {
-        set-tools-file ;
-        [ -v IMAGE ] || local IMAGE=alpine:latest ; set_installation_mode ;
-        docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
-        echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
-        echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
-        add_installations ;
-#       sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-        docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-        docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ;
-        unset MANAGER INSTALL ; }
+function take-base() {
+  update-versions ;
+  set-tools-file ;
+  [ -v IMAGE ] || local IMAGE=alpine:latest ; set_installation_mode ;
+  docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
+  echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
+  echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
+  add_installations ;
+#  sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
+  docker build --no-cache -t main-tools:latest /tmp # && rm /tmp/Dockerfile ;
+  docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ;
+  unset MANAGER INSTALL move ; }
 
 ##### CALLING THE TOOLS #####
 
@@ -101,43 +96,41 @@ alias debug-image="execute bash main-tools" # Careful with bringing .bashrc file
 ##### TESTING #####
 
 function test-installations() {
-        function try_versions() {
-        for tool in "${list_of_tools[@]}" ; do
-                [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
-        done ; }
-        local IMAGE=ubuntu:latest && set-base && try_versions ;
-        local IMAGE=cimg/base:current && set-base && try_versions ;
-        unset IMAGE && set-base && try_versions ;
+  function try_versions() {
+  for tool in "${list_of_tools[@]}" ; do
+    [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
+  done ; }
+  local IMAGE=ubuntu:latest && set-base && try_versions ;
+  local IMAGE=cimg/base:current && set-base && try_versions ;
+  unset IMAGE && set-base && try_versions ;
 }
 
 ##### INSTALLATIONS #####
 
 function set_installation_mode() { # This is improvable
-        case ${IMAGE} in
-        alpi*)  MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
-        ubun*)  MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
-        cimg*)  MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
+  case ${IMAGE} in
+    alpi*)      MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
+    ubun*)      MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
+    cimg*)      MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
         *)      MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
-        esac
+  esac
 }
 
 function generic_install() { echo "RUN $MANAGER $INSTALL ${@}" >> /tmp/Dockerfile ; }
 
-function install_terraform() {  echo "
-        # Terraform installation
-        RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_${ARCH}.zip
-        RUN unzip terraform_$(find_version terraform)_linux_${ARCH}.zip && rm terraform_$(find_version terraform)_linux_${ARCH}.zip
-        RUN $move terraform /usr/bin/terraform" >> /tmp/Dockerfile ; }
+function install_terraform() {  echo -e "  # Terraform installation
+  RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_${ARCH}.zip
+  RUN unzip terraform_$(find_version terraform)_linux_${ARCH}.zip && rm terraform_$(find_version terraform)_linux_${ARCH}.zip
+  RUN $move terraform /usr/bin/terraform" >> /tmp/Dockerfile ; }
 
-function install_go() { echo "
-        # Golang installation
-        COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
-        ENV PATH=\"/usr/local/go/bin:${PATH}\"" >> /tmp/Dockerfile ; }
+function install_go() { echo "  # Golang installation
+  COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
+  ENV PATH=\"/usr/local/go/bin:${PATH}\"" >> /tmp/Dockerfile ; }
 
-function install_nodejs() { echo "
-        # Nodejs installation
-        COPY --from=node:$(find_version nodejs)-alpine /usr/lib /usr/lib
-        COPY --from=node:$(find_version nodejs)-alpine /usr/local/share /usr/local/share
-        COPY --from=node:$(find_version nodejs)-alpine /usr/local/lib /usr/local/lib
-        COPY --from=node:$(find_version nodejs)-alpine /usr/local/include /usr/local/include
-        COPY --from=node:$(find_version nodejs)-alpine /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ; }
+function install_nodejs() { echo "  # Nodejs installation
+  COPY --from=node:$(find_version nodejs)-alpine /usr/lib /usr/lib
+  COPY --from=node:$(find_version nodejs)-alpine /usr/local/share /usr/local/share
+  COPY --from=node:$(find_version nodejs)-alpine /usr/local/lib /usr/local/lib
+  COPY --from=node:$(find_version nodejs)-alpine /usr/local/include /usr/local/include
+  COPY --from=node:$(find_version nodejs)-alpine /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ; }
+
