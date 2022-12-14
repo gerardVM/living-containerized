@@ -71,6 +71,9 @@ function set-image() {
 
 function take-base() {
   update-versions ;
+  if [ -f ./.tool-versions ] && versions-modified || no-image ; then set-base ; fi }
+
+function set-base() {
   set-tools-file ;
   [ -v IMAGE ] || local IMAGE=alpine:latest ; set_installation_mode ;
   docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
