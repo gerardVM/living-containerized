@@ -6,6 +6,8 @@ declare -a list_of_tools=(
   "nodejs NODE_VERSION"
 )
 
+BaseImages=("alpine:latest" "ubuntu:latest" "cimg/base:current")
+
 ##### DEFINING BASE IMAGE #####
 
 function add_installations() {
@@ -14,10 +16,9 @@ function add_installations() {
     image_is alpine && generic_install bash ;
     image_is ubuntu && generic_install wget ;
     image_is ubuntu && generic_install zip ;
-    image_is alpine && generic_install openssh ;
-    image_is ubuntu && generic_install openssh-server ;
+  ! image_is cimg/b && generic_install openssh-client ;
   ! image_is cimg/b && generic_install git ;
-  install_versioned_tools ;
+    install_versioned_tools ;
 }
 
 ##### DEFINING CONTAINER #####
@@ -38,15 +39,23 @@ function execute {
 function read-versions {
   [ -f ./.tool-versions ] && local vFile="./.tool-versions" || local vFile="$HOME/.tool-versions"
   echo "Your setup is:" && cat $vFile ;
-  alias file_column='echo $line | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
-  while read line; do
-    for tool in "${list_of_tools[@]}" ; do
-      [[ $(tool_column 1) == $(file_column 1) ]] && export "$(tool_column 2)=$(file_column 2)" # || unset $(tool_column 2)
-    done
-  done < $vFile
+  alias file_column='echo $FILEs_TOOL | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
+  for tool in "${list_of_tools[@]}" ; do
+    local FILEs_TOOL=$(cat $vFile | grep $(tool_column 1))
+    [ $FILEs_TOOL ] && export "$(tool_column 2)=$(file_column 2)" || unset $(tool_column 2)
+  done
   local variables="|" && for tool in "${list_of_tools[@]}" ; do variables+=" $(tool_column 2) |" ; done
   echo -e "You may want to set, unset of modify following variables: \n$variables"
   unalias file_column tool_column ;
+}
+
+function update-versions { # This is improvable
+  alias tool_column='echo $tool | cut -d " " -f'
+  for tool in "${list_of_tools[@]}" ; do [ -v $(tool_column 2) ] && : > ./.tool-versions ; done
+  for tool in "${list_of_tools[@]}" ; do
+    [ -v $(tool_column 2) ] && echo "$(tool_column 1) $(eval echo \$$(tool_column 2))" >> ./.tool-versions
+  done
+  unalias tool_column
 }
 
 ##### HELPERS #####
@@ -65,8 +74,7 @@ function install_versioned_tools() {
 ##### BUILDING IMAGE #####
 
 function set-image() {
-  local options=("alpine:latest" "ubuntu:latest" "cimg/base:current")
-  select opt in "${options[@]}" ; do [ $opt ] && IMAGE=$opt || IMAGE=alpine:latest ;
+  select opt in "${BaseImages[@]}" ; do [ $opt ] && IMAGE=$opt || IMAGE=alpine:latest ;
   echo "Image set to: $IMAGE" ; break ; done }
 
 function take-base() {
@@ -81,14 +89,14 @@ function set-base() {
   echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
   add_installations ;
 #  sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-  docker build --no-cache -t main-tools:latest /tmp # && rm /tmp/Dockerfile ;
+  docker build --no-cache -t main-tools:latest /tmp ;
   docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ;
   unset MANAGER INSTALL move ; }
 
 ##### CALLING THE TOOLS #####
 
 alias make="execute make main-tools"
-alias git="execute git alpine/git"
+alias git="execute git main-tools"
 alias aws="execute aws amazon/aws-cli"
 alias terraform="execute terraform main-tools"
 alias go="execute go main-tools"
@@ -98,42 +106,58 @@ alias debug-image="execute bash main-tools" # Careful with bringing .bashrc file
 
 ##### TESTING #####
 
-function test-installations() {
+function test-installations() { # Versioning is not workking in the tests
   function try_versions() {
-  for tool in "${list_of_tools[@]}" ; do
-    [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
-  done ; }
-  local IMAGE=ubuntu:latest && set-base && try_versions ;
-  local IMAGE=cimg/base:current && set-base && try_versions ;
-  unset IMAGE && set-base && try_versions ;
+    for tool in "${list_of_tools[@]}" ; do
+      [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
+    done ; }
+  for image in "${BaseImages[@]}" ; do
+    local IMAGE=$image && set-base && try_versions ;
+  done
 }
 
 ##### INSTALLATIONS #####
 
-function set_installation_mode() { # This is improvable
+function set_installation_mode() {
   case ${IMAGE} in
-    alpi*)      MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
-    ubun*)      MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
-    cimg*)      MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
-        *)      MANAGER="apt -y"          && INSTALL="install"  && move="mv" ;;
+    alpi*)	MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
+    ubun*)	MANAGER="apt -y" 	  && INSTALL="install"  && move="mv" ;;
+    cimg*)	MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
   esac
 }
 
 function generic_install() { echo "RUN $MANAGER $INSTALL ${@}" >> /tmp/Dockerfile ; }
 
-function install_terraform() {  echo -e "  # Terraform installation
+function install_terraform() {  echo -e "  # Terraform installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
   RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_${ARCH}.zip
   RUN unzip terraform_$(find_version terraform)_linux_${ARCH}.zip && rm terraform_$(find_version terraform)_linux_${ARCH}.zip
   RUN $move terraform /usr/bin/terraform" >> /tmp/Dockerfile ; }
 
-function install_go() { echo "  # Golang installation
-  COPY --from=golang:$(find_version go)-alpine /usr/local/go/ /usr/local/go/
-  ENV PATH=\"/usr/local/go/bin:${PATH}\"" >> /tmp/Dockerfile ; }
+function install_go() {
 
-function install_nodejs() { echo "  # Nodejs installation
-  COPY --from=node:$(find_version nodejs)-alpine /usr/lib /usr/lib
-  COPY --from=node:$(find_version nodejs)-alpine /usr/local/share /usr/local/share
-  COPY --from=node:$(find_version nodejs)-alpine /usr/local/lib /usr/local/lib
-  COPY --from=node:$(find_version nodejs)-alpine /usr/local/include /usr/local/include
-  COPY --from=node:$(find_version nodejs)-alpine /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ; }
+  case ${IMAGE} in
+    alpi*) local suffix=alpine ;;
+        *) local suffix=stretch ;;
+  esac
 
+  echo -e "  # Go installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
+  COPY --from=golang:$(find_version go)-$suffix /usr/local/go/ /usr/local/go/
+  ENV PATH=\"/usr/local/go/bin:\${PATH}\"" >> /tmp/Dockerfile ;
+
+}
+
+function install_nodejs() {
+
+  case ${IMAGE} in
+    alpi*) local suffix=alpine ;;
+        *) local suffix=bullseye-slim ;;
+  esac
+
+  echo -e "  # NodeJS installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
+  COPY --from=node:$(find_version nodejs)-$suffix /usr/lib /usr/lib
+  COPY --from=node:$(find_version nodejs)-$suffix /usr/local/share /usr/local/share
+  COPY --from=node:$(find_version nodejs)-$suffix /usr/local/lib /usr/local/lib
+  COPY --from=node:$(find_version nodejs)-$suffix /usr/local/include /usr/local/include
+  COPY --from=node:$(find_version nodejs)-$suffix /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ;
+
+}
