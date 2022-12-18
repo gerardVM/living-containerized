@@ -24,7 +24,7 @@ function add_installations() {
 ##### DEFINING CONTAINER #####
 
 function execute {
-  [[ ${2} == "main-tools" ]] && take-base ;
+  [[ ${2} == "main-tools" ]] && take-base && echo "You got into a container with $IMAGE-based ${2} as image" ||
   echo "You got into a container with ${2} as image" ;
   docker run --rm -it \
     --entrypoint ${1} \
@@ -42,7 +42,7 @@ function read-versions {
   alias file_column='echo $FILEs_TOOL | cut -d " " -f' ; alias tool_column='echo $tool | cut -d " " -f' ;
   for tool in "${list_of_tools[@]}" ; do
     local FILEs_TOOL=$(cat $vFile | grep $(tool_column 1))
-    [ $FILEs_TOOL ] && export "$(tool_column 2)=$(file_column 2)" || unset $(tool_column 2)
+    [[ $FILEs_TOOL ]] && export "$(tool_column 2)=$(file_column 2)" || unset $(tool_column 2)
   done
   local variables="|" && for tool in "${list_of_tools[@]}" ; do variables+=" $(tool_column 2) |" ; done
   echo -e "You may want to set, unset of modify following variables: \n$variables"
@@ -83,7 +83,7 @@ function take-base() {
 
 function set-base() {
   set-tools-file ;
-  [ -v IMAGE ] || local IMAGE=alpine:latest ; set_installation_mode ;
+  [ -v IMAGE ] || IMAGE=alpine:latest ; set_installation_mode ;
   docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
   echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
   echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
@@ -96,7 +96,7 @@ function set-base() {
 ##### CALLING THE TOOLS #####
 
 alias make="execute make main-tools"
-alias git="execute git main-tools"
+alias git="execute git alpine/git"
 alias aws="execute aws amazon/aws-cli"
 alias terraform="execute terraform main-tools"
 alias go="execute go main-tools"
