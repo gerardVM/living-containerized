@@ -4,6 +4,7 @@ declare -a list_of_tools=(
   "terraform TF_VERSION"
   "go GO_VERSION"
   "nodejs NODE_VERSION"
+  "php PHP_VERSION"
 )
 
 BaseImages=("alpine:latest" "ubuntu:latest" "cimg/base:current")
@@ -24,7 +25,8 @@ function add_installations() {
 ##### DEFINING CONTAINER #####
 
 function execute {
-  [[ ${2} == "main-tools" ]] && take-base && echo "You got into a container with $IMAGE-based ${2} as image" ||
+  [[ ${2} == "main-tools" ]] && take-base && 
+  echo "You got into a container based in $(get_distro ${2})" ||
   echo "You got into a container with ${2} as image" ;
   docker run --rm -it \
     --entrypoint ${1} \
@@ -61,10 +63,12 @@ function update-versions { # This is improvable
 ##### HELPERS #####
 
 function versions-modified() { ! cmp -s ~/.tool-versions ./.tool-versions ; }
-function set-tools-file() { cp ./.tool-versions ~/.tool-versions ; }
+function set-tools-file() { sudo cp ./.tool-versions ~/.tool-versions ; }
+# function set-tools-file() { cp ./.tool-versions ~/.tool-versions ; }
 function find_version() { grep -i -m 1 ${1} ~/.tool-versions | cut -d " " -f 2 ; }
 function no-image() { [[ "$(docker images -q main-tools:latest 2> /dev/null)" == "" ]]; }
 function image_is() { [[ $IMAGE == ${1}* ]] ; }
+function get_distro() { docker run --rm --entrypoint cat -it ${1} /etc/os-release | grep ^ID= | cut -d "=" -f 2; }
 function install_versioned_tools() {
   for tool in "${list_of_tools[@]}" ; do
     [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && install_$(echo $tool | cut -d " " -f 1)
@@ -75,11 +79,13 @@ function install_versioned_tools() {
 
 function set-image() {
   select opt in "${BaseImages[@]}" ; do [ $opt ] && IMAGE=$opt || IMAGE=alpine:latest ;
-  echo "Image set to: $IMAGE" ; break ; done }
+  echo "Image set to: $IMAGE" ; break ; done 
+}
 
 function take-base() {
   update-versions ;
-  if [ -f ./.tool-versions ] && versions-modified || no-image ; then set-base ; fi }
+  if [ -f ./.tool-versions ] && versions-modified || no-image ; then set-base ; fi 
+}
 
 function set-base() {
   set-tools-file ;
@@ -87,20 +93,22 @@ function set-base() {
   docker pull $IMAGE && local ARCH=$(docker inspect --format='{{.Architecture}}' $IMAGE) ;
   echo "Building image from $IMAGE... your setup is:" && cat ~/.tool-versions ;
   echo -e "FROM $IMAGE \nRUN $MANAGER update" > /tmp/Dockerfile ;
-  add_installations ;
+  add_installations ; unset_installation_mode ;
+  sudo docker build -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
 #  sudo docker build --no-cache -t main-tools:latest /tmp && rm /tmp/Dockerfile ;
-  docker build --no-cache -t main-tools:latest /tmp ;
-  docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ;
-  unset MANAGER INSTALL move ; }
+#  docker build --no-cache -t main-tools:latest /tmp ;
+  docker rmi $IMAGE $(docker images -qa -f 'dangling=true') ; 
+}
 
 ##### CALLING THE TOOLS #####
 
 alias make="execute make main-tools"
-alias git="execute git alpine/git"
+# alias git="execute git alpine/git"
 alias aws="execute aws amazon/aws-cli"
 alias terraform="execute terraform main-tools"
 alias go="execute go main-tools"
 alias node="execute node main-tools"
+alias php="execute php main-tools"
 alias debug-image="execute bash main-tools" # Careful with bringing .bashrc file
 # alias k9s="execute k9s quay.io/derailed/k9s"
 
@@ -110,7 +118,8 @@ function test-installations() { # Versioning is not workking in the tests
   function try_versions() {
     for tool in "${list_of_tools[@]}" ; do
       [ $(find_version $(echo $tool | cut -d " " -f 1)) ] && $(echo $tool | cut -d " " -f 1) version
-    done ; }
+    done ; 
+  }
   for image in "${BaseImages[@]}" ; do
     local IMAGE=$image && set-base && try_versions ;
   done
@@ -120,13 +129,15 @@ function test-installations() { # Versioning is not workking in the tests
 
 function set_installation_mode() {
   case ${IMAGE} in
-    alpi*)	MANAGER="apk"             && INSTALL="add"      && move="mv" ;;
-    ubun*)	MANAGER="apt -y" 	  && INSTALL="install"  && move="mv" ;;
-    cimg*)	MANAGER="sudo apt-get -y" && INSTALL="install"  && move="sudo mv" ;;
+    alpine*)    manager="apk"             && install="add"      && make="make"      && move="mv" ;;
+    ubuntu*)    manager="apt -y"          && install="install"  && make="make"      && move="mv" ;;
+    cimg/base*) manager="sudo apt-get -y" && install="install"  && make="sudo make" && move="sudo mv" ;;
   esac
 }
 
-function generic_install() { echo "RUN $MANAGER $INSTALL ${@}" >> /tmp/Dockerfile ; }
+function unset_installation_mode() { unset MANAGER INSTALL make move ; }
+
+function generic_install() { echo "RUN $manager $install ${@}" >> /tmp/Dockerfile ; }
 
 function install_terraform() {  echo -e "  # Terraform installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
   RUN wget https://releases.hashicorp.com/terraform/$(find_version terraform)/terraform_$(find_version terraform)_linux_${ARCH}.zip
@@ -136,8 +147,8 @@ function install_terraform() {  echo -e "  # Terraform installation | Tested wit
 function install_go() {
 
   case ${IMAGE} in
-    alpi*) local suffix=alpine ;;
-        *) local suffix=stretch ;;
+    alpine*) local suffix=alpine ;;
+          *) local suffix=stretch ;;
   esac
 
   echo -e "  # Go installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
@@ -149,8 +160,8 @@ function install_go() {
 function install_nodejs() {
 
   case ${IMAGE} in
-    alpi*) local suffix=alpine ;;
-        *) local suffix=bullseye-slim ;;
+    alpine*) local suffix=alpine ;;
+          *) local suffix=bullseye-slim ;;
   esac
 
   echo -e "  # NodeJS installation | Tested with alpine:latest, ubuntu:latest and cimg/base:current
@@ -161,3 +172,27 @@ function install_nodejs() {
   COPY --from=node:$(find_version nodejs)-$suffix /usr/local/bin /usr/local/bin" >> /tmp/Dockerfile ;
 
 }
+
+function install_php() {
+
+#  case ${IMAGE} in
+#    alpi*) local suffix=alpine ;;
+#        *) local suffix=jessie ;;
+#  esac
+
+  echo -e "  # PHP installation | Tested with ubuntu:latest and cimg/base:current
+  RUN wget https://www.php.net/distributions/php-$(find_version php).tar.gz
+  RUN tar -xvf php-$(find_version php).tar.gz && rm php-$(find_version php).tar.gz
+  RUN $manager $install gcc pkg-config libxml2-dev libsqlite3-dev
+  WORKDIR ./php-$(find_version php)
+  RUN ./configure
+  RUN $make 
+  RUN $make install" >> /tmp/Dockerfile ; 
+
+}
+#  COPY --from=php:$(find_version php)-$suffix /usr/local/bin/php /usr/local/bin/php
+#  COPY --from=php:$(find_version php)-$suffix /usr/local/etc/php /usr/local/etc/php
+#  COPY --from=php:$(find_version php)-$suffix /usr/local/lib/php /usr/local/lib/php
+#  COPY --from=php:$(find_version php)-$suffix /usr/local/php /usr/local/php" >> /tmp/Dockerfile ;
+#  COPY --from=php:$(find_version php)-$suffix /usr/local/etc/php /usr/local/etc/php
+#  ENV PATH=\"/usr/local/etc/php:\${PATH}\"" >> /tmp/Dockerfile ;

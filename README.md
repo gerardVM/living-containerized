@@ -14,7 +14,7 @@ docker run --rm curlimages/curl https://raw.githubusercontent.com/gerardVM/livin
 
 2- Include an extra line to your ~/.bashrc file to source your new configuration.
 ```bash
-echo "[ -f ~/.living_containerized ] && . ~/.living_containerized" >> ~/.bashrc
+echo "[ $(echo $(which docker)) ] && . ~/.living_containerized" >> ~/.bashrc
 ```
 
 3- Clean up the curl docker image (Optional).
